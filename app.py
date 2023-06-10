@@ -1,42 +1,47 @@
 from flask import Flask, render_template, request
 import cv2
 from PIL import Image
-import pytesseract
-import tensorflow as tf
-import numpy as np
-import torch
+from google.cloud import vision
+from gtts import gTTS
 import torchaudio
-from transformers import T5Tokenizer, TFT5ForConditionalGeneration
+import torch
+import tempfile
 
 app = Flask(__name__)
 
-# Load OCR model (Tesseract) and TTS model (T5-based)
-pytesseract.pytesseract.tesseract_cmd = 'path/to/tesseract'
-tokenizer = T5Tokenizer.from_pretrained('t5-base')
-tts_model = TFT5ForConditionalGeneration.from_pretrained('t5-base')
+# Initialize the Google Cloud Vision client
+from google.oauth2 import service_account
 
+credentials = service_account.Credentials.from_service_account_file('G:/ML PROJ/EchoRx/.gitignore/spatial-lock-389419-4d2ce3eff0a9.json')
+vision_client = vision.ImageAnnotatorClient(credentials=credentials)
 
 # Load the pre-trained TTS model and configure the audio settings
-tts_model._make_predict_function()  # For TensorFlow 1.x compatibility
 audio_config = torchaudio.transforms.Resample(48_000, 16_000)
 
 
 # Function to convert prescription image to spoken speech
 def convert_prescription_to_speech(image):
-    # Perform OCR to extract text from the prescription image
-    prescription_text = pytesseract.image_to_string(image)
+    # Perform OCR using Google Cloud Vision API
+    with tempfile.NamedTemporaryFile(suffix=".png") as temp_image:
+        image.save(temp_image.name)
+        with open(temp_image.name, "rb") as image_file:
+            image_content = image_file.read()
 
-    # Preprocess the text and convert it to speech
-    input_ids = tokenizer.encode(prescription_text, return_tensors='tf')
-    input_ids = tf.convert_to_tensor(input_ids)
+        vision_image = vision.Image(content=dict(image_content))
+        response = vision_client.text_detection(image=vision_image)
+        texts = response.text_annotations
+        ocr_text = texts[0].description if texts else ''
 
-    # Generate speech from the input text
-    audio = tts_model.generate(input_ids)
-    audio = tf.squeeze(audio, axis=0)
+    # Convert the OCR text to speech using gTTS
+    tts = gTTS(text=ocr_text, lang='en')
+
+    # Save the synthesized speech to a WAV file
+    output_file = 'static/output.wav'
+    tts.save(output_file)
 
     # Convert audio to numpy array and resample to 16kHz
-    audio_np = np.array(audio)
-    audio_resampled = audio_config(torch.from_numpy(audio_np)).numpy()
+    audio_resampled, _ = torchaudio.load(output_file, num_frames=-1, normalize=True)
+    audio_resampled = audio_config(torch.from_numpy(audio_resampled.numpy())).numpy()
 
     return audio_resampled
 
@@ -54,7 +59,7 @@ def capture_image():
     return None
 
 
-# Routes
+# Routes (same as before)
 @app.route('/')
 def home():
     return render_template('index.html')
@@ -67,28 +72,17 @@ def process():
         return render_template('index.html', error='No image file provided.')
 
     image = request.files['image']
-    
+
     # Check if the file is an image
     if image.filename == '':
         return render_template('index.html', error='No image file provided.')
-    
-    if not allowed_file(image.filename):
-        return render_template('index.html', error='Invalid file format. Only images are allowed.')
-    
+
     try:
-        # Process the uploaded image
-        image = Image.open(image).convert('L')  # Convert to grayscale
-        image = image.resize((224, 224))  # Resize to match TTS model input size
-        
-        # Convert PIL image to TensorFlow tensor
-        image_tensor = tf.convert_to_tensor(np.array(image), dtype=tf.float32)
-        image_tensor /= 255.  # Normalize pixel values to [0, 1]
+        # Convert the uploaded image to PIL format
+        pil_image = Image.open(image).convert('L')
 
-        # Convert single image tensor to a batch of size 1
-        image_tensor = tf.expand_dims(image_tensor, axis=0)
-
-        # Generate speech from the prescription image
-        audio_output = convert_prescription_to_speech(image_tensor)
+        # Perform OCR on the uploaded image using Google Cloud Vision API and convert to speech
+        audio_output = convert_prescription_to_speech(pil_image)
 
         # Save the synthesized speech to a WAV file
         output_file = 'static/output.wav'
@@ -99,12 +93,6 @@ def process():
     except Exception as e:
         error_message = f"An error occurred: {str(e)}"
         return render_template('index.html', error=error_message)
-
-
-# Helper function to check allowed file extensions
-def allowed_file(filename):
-    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 if __name__ == '__main__':
