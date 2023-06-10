@@ -1,16 +1,18 @@
-from flask import Flask, render_template, request
+import os
 import cv2
 from PIL import Image
-from google.cloud import vision
-from gtts import gTTS
 import torchaudio
 import torch
+from google.cloud import vision
+from google.oauth2 import service_account
+from gtts import gTTS
+from flask import Flask, render_template, request
 import tempfile
+
+tempfile.tempdir = 'temp'
 
 app = Flask(__name__)
 
-# Initialize the Google Cloud Vision client
-from google.oauth2 import service_account
 
 credentials = service_account.Credentials.from_service_account_file('G:/ML PROJ/EchoRx/.gitignore/spatial-lock-389419-4d2ce3eff0a9.json')
 vision_client = vision.ImageAnnotatorClient(credentials=credentials)
@@ -22,7 +24,16 @@ audio_config = torchaudio.transforms.Resample(48_000, 16_000)
 # Function to convert prescription image to spoken speech
 def convert_prescription_to_speech(image):
     # Perform OCR using Google Cloud Vision API
-    with tempfile.NamedTemporaryFile(suffix=".png") as temp_image:
+    # temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')
+
+    # Create a temporary directory with the necessary permissions
+    temp_dir = tempfile.mkdtemp(dir='.', prefix='temp_', suffix='')
+
+    # Save the image to the temporary directory
+    temp_image_path = os.path.join(temp_dir, 'temp_image.png')
+    image.save(temp_image_path)
+
+    with tempfile.NamedTemporaryFile(suffix=".png", dir=temp_image_path) as temp_image:
         image.save(temp_image.name)
         with open(temp_image.name, "rb") as image_file:
             image_content = image_file.read()
@@ -34,9 +45,10 @@ def convert_prescription_to_speech(image):
 
     # Convert the OCR text to speech using gTTS
     tts = gTTS(text=ocr_text, lang='en')
-
+    os.remove(temp_image_path)
+    os.rmdir(temp_dir)
     # Save the synthesized speech to a WAV file
-    output_file = 'static/output.wav'
+    output_file = 'output.wav'
     tts.save(output_file)
 
     # Convert audio to numpy array and resample to 16kHz
@@ -85,7 +97,7 @@ def process():
         audio_output = convert_prescription_to_speech(pil_image)
 
         # Save the synthesized speech to a WAV file
-        output_file = 'static/output.wav'
+        output_file = 'output.wav'
         torchaudio.save(output_file, torch.from_numpy(audio_output), 16000)
 
         return render_template('result.html', audio_file=output_file)
