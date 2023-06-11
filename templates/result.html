@@ -5,6 +5,8 @@
 </head>
 <body>
     <h1>Prescription Audio</h1>
-    <audio controls src="{{ audio_file }}"></audio>
+    <audio controls>
+        <source src="{{ audio_url }}" type="audio/wav">
+    </audio>
 </body>
 </html>

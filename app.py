@@ -1,59 +1,73 @@
 import os
+import numpy
 import cv2
 from PIL import Image
 import torchaudio
 import torch
 from google.cloud import vision
+from google.cloud import texttospeech
 from google.oauth2 import service_account
-from gtts import gTTS
 from flask import Flask, render_template, request
 import tempfile
 
 tempfile.tempdir = 'temp'
+temp_dir = 'temp'
+torchaudio.set_audio_backend('soundfile')
 
 app = Flask(__name__)
 
+# Configure Google Cloud credentials
+credentials = service_account.Credentials.from_service_account_file('G:/ML PROJ/EchoRx/.gitignore/spatial-lock-389419-d2e8d7a3196b.json')
 
-credentials = service_account.Credentials.from_service_account_file('G:/ML PROJ/EchoRx/.gitignore/spatial-lock-389419-4d2ce3eff0a9.json')
+# Create a Google Cloud Vision client
 vision_client = vision.ImageAnnotatorClient(credentials=credentials)
 
+# Create a Google Cloud Text-to-Speech client
+tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
+
 # Load the pre-trained TTS model and configure the audio settings
-audio_config = torchaudio.transforms.Resample(48_000, 16_000)
+audio_resampler = torchaudio.transforms.Resample(48_000, 16_000)
 
 
 # Function to convert prescription image to spoken speech
 def convert_prescription_to_speech(image):
     # Perform OCR using Google Cloud Vision API
-    # temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')
-
-    # Create a temporary directory with the necessary permissions
-    temp_dir = tempfile.mkdtemp(dir='.', prefix='temp_', suffix='')
+    # temp_dir = tempfile.mkdtemp(dir='.', prefix='temp_', suffix='')
 
     # Save the image to the temporary directory
     temp_image_path = os.path.join(temp_dir, 'temp_image.png')
     image.save(temp_image_path)
 
-    with tempfile.NamedTemporaryFile(suffix=".png", dir=temp_image_path) as temp_image:
-        image.save(temp_image.name)
-        with open(temp_image.name, "rb") as image_file:
-            image_content = image_file.read()
+    with open(temp_image_path, "rb") as image_file:
+        image_content = image_file.read()
 
-        vision_image = vision.Image(content=dict(image_content))
-        response = vision_client.text_detection(image=vision_image)
-        texts = response.text_annotations
-        ocr_text = texts[0].description if texts else ''
+    vision_image = vision.Image(content=image_content)
+    response = vision_client.text_detection(image=vision_image)
+    texts = response.text_annotations
+    ocr_text = texts[0].description if texts else ''
 
-    # Convert the OCR text to speech using gTTS
-    tts = gTTS(text=ocr_text, lang='en')
-    os.remove(temp_image_path)
-    os.rmdir(temp_dir)
+    # Synthesize speech using Google Cloud Text-to-Speech API
+    synthesis_input = texttospeech.SynthesisInput(text=ocr_text)
+
+    voice = texttospeech.VoiceSelectionParams(
+        language_code='en-US', ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
+    )
+    audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.LINEAR16)
+
+    response = tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
+    audio_content = response.audio_content
+
     # Save the synthesized speech to a WAV file
-    output_file = 'output.wav'
-    tts.save(output_file)
+    output_file = 'static/output.wav'
+    with open(output_file, 'wb') as audio_file:
+        audio_file.write(audio_content)
 
     # Convert audio to numpy array and resample to 16kHz
-    audio_resampled, _ = torchaudio.load(output_file, num_frames=-1, normalize=True)
-    audio_resampled = audio_config(torch.from_numpy(audio_resampled.numpy())).numpy()
+    audio_resampled, _ = torchaudio.load(output_file, num_frames=-1)
+    audio_resampled = audio_resampler(torch.from_numpy(audio_resampled.numpy())).numpy()
+
+    # Clean up temporary files and directory
+    # os.remove(temp_image_path)
 
     return audio_resampled
 
@@ -89,6 +103,11 @@ def process():
     if image.filename == '':
         return render_template('index.html', error='No image file provided.')
 
+    # Check the file format
+    allowed_extensions = ['.jpg', '.jpeg', '.png']
+    if not any(image.filename.lower().endswith(ext) for ext in allowed_extensions):
+        return render_template('index.html', error='Invalid image file format.')
+
     try:
         # Convert the uploaded image to PIL format
         pil_image = Image.open(image).convert('L')
@@ -96,11 +115,11 @@ def process():
         # Perform OCR on the uploaded image using Google Cloud Vision API and convert to speech
         audio_output = convert_prescription_to_speech(pil_image)
 
-        # Save the synthesized speech to a WAV file
-        output_file = 'output.wav'
-        torchaudio.save(output_file, torch.from_numpy(audio_output), 16000)
+        # Convert audio to numpy array and resample to 16kHz
+        audio_tensor = torch.from_numpy(audio_output)
+        audio_resampled = audio_resampler(audio_tensor).numpy()
 
-        return render_template('result.html', audio_file=output_file)
+        return render_template('result.html', audio_file='static/output.wav')
 
     except Exception as e:
         error_message = f"An error occurred: {str(e)}"
