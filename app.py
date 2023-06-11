@@ -12,6 +12,7 @@ import tempfile
 
 tempfile.tempdir = 'temp'
 temp_dir = 'temp'
+output_file = 'static/output.wav'
 torchaudio.set_audio_backend('soundfile')
 
 app = Flask(__name__)
@@ -49,39 +50,27 @@ def convert_prescription_to_speech(image):
     # Synthesize speech using Google Cloud Text-to-Speech API
     synthesis_input = texttospeech.SynthesisInput(text=ocr_text)
 
-    voice = texttospeech.VoiceSelectionParams(
-        language_code='en-US', ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
-    )
+    voice = texttospeech.VoiceSelectionParams(language_code='en-IN', ssml_gender=texttospeech.SsmlVoiceGender.FEMALE)
     audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.LINEAR16)
 
     response = tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
     audio_content = response.audio_content
 
     # Save the synthesized speech to a WAV file
-    output_file = 'static/output.wav'
     with open(output_file, 'wb') as audio_file:
         audio_file.write(audio_content)
-
-    # Convert audio to numpy array and resample to 16kHz
-    audio_resampled, _ = torchaudio.load(output_file, num_frames=-1)
-    audio_resampled = audio_resampler(torch.from_numpy(audio_resampled.numpy())).numpy()
-
-    # Clean up temporary files and directory
-    # os.remove(temp_image_path)
-
-    return audio_resampled
 
 
 # Function to capture an image using OpenCV
 def capture_image():
-    camera = cv2.VideoCapture(0)  # Use the default camera or specify the device ID
+    camera = cv2.VideoCapture(0)
     ret, frame = camera.read()
     if ret:
         # Convert BGR image to grayscale
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # Convert grayscale image to PIL Image format
         image = Image.fromarray(image)
         return image
+
     return None
 
 
@@ -113,11 +102,7 @@ def process():
         pil_image = Image.open(image).convert('L')
 
         # Perform OCR on the uploaded image using Google Cloud Vision API and convert to speech
-        audio_output = convert_prescription_to_speech(pil_image)
-
-        # Convert audio to numpy array and resample to 16kHz
-        audio_tensor = torch.from_numpy(audio_output)
-        audio_resampled = audio_resampler(audio_tensor).numpy()
+        convert_prescription_to_speech(pil_image)
 
         return render_template('result.html', audio_file='static/output.wav')
 
