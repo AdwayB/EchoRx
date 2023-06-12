@@ -33,7 +33,6 @@ audio_resampler = torchaudio.transforms.Resample(48_000, 16_000)
 # Function to convert prescription image to spoken speech
 def convert_prescription_to_speech(image):
     # Perform OCR using Google Cloud Vision API
-    # temp_dir = tempfile.mkdtemp(dir='.', prefix='temp_', suffix='')
 
     # Save the image to the temporary directory
     temp_image_path = os.path.join(temp_dir, 'temp_image.png')
@@ -74,7 +73,7 @@ def capture_image():
     return None
 
 
-# Routes (same as before)
+# Routes
 @app.route('/')
 def home():
     return render_template('index.html')
